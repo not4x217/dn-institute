@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 
@@ -31,10 +31,18 @@ class TxLookup:
 
     `block_time` is the time of the block holding the confirmed, final
     transaction, or None if it isn't on chain (never mined, reverted or
-    reorged out).
+    reorged out). It must be timezone-aware and is converted to UTC, like
+    timestamps parsed from the feed.
     """
 
     block_time: datetime | None
+
+    def __post_init__(self) -> None:
+        if self.block_time is None:
+            return
+        if self.block_time.tzinfo is None:
+            raise ValueError(f"block_time must be timezone-aware, got {self.block_time.isoformat()}")
+        object.__setattr__(self, "block_time", self.block_time.astimezone(UTC))
 
 
 class ChainResolver(Protocol):

@@ -1,12 +1,14 @@
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from fakes import FakeChain, utc
 
 from trade_feed_validator.models import DropReason, Flag, Reason
 from trade_feed_validator.parsing import COLUMNS
 from trade_feed_validator.pipeline import Validator
-from trade_feed_validator.resolution import NoOpResolver, resolve
+from trade_feed_validator.resolution import NoOpResolver, TxLookup, resolve
 
 SAMPLE = Path(__file__).parent.parent / "sample_feed.csv"
 
@@ -147,3 +149,15 @@ def test_sample_with_full_chain_answers_resolves_every_row():
     loaded = validated.clean + resolved.loaded
     assert sorted(e.event_id for e in loaded) == [f"evt_00{i}" for i in (1, 2, 4, 5, 6, 7, 8)]
     assert sum(e.amount for e in loaded) == Decimal("585000")
+
+
+def test_resolver_time_is_converted_to_utc():
+    plus_two = datetime(2026, 1, 1, 11, 58, 20, tzinfo=timezone(timedelta(hours=2)))
+    _, resolved = run(FakeChain(txs={"0xaa4": plus_two}))
+    assert by_id(resolved.loaded)["evt_005"].block_time == utc(9, 58, 20)
+    assert by_id(resolved.loaded)["evt_005"].block_time.tzinfo == UTC
+
+
+def test_resolver_time_without_timezone_is_rejected():
+    with pytest.raises(ValueError, match="timezone-aware"):
+        TxLookup(datetime(2026, 1, 1, 9, 58, 20))
