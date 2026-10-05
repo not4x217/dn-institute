@@ -28,12 +28,28 @@ def write_outputs(
     quarantined: Iterable[QuarantinedRow],
     dropped: Iterable[DroppedRow],
 ) -> None:
-    """Write all three files, even when empty, so none is left from an earlier run."""
+    """Write all three files, even when empty, so none is left from an earlier run.
+
+    Files are written under temporary names and renamed into place only once
+    all three are complete, so a failed write leaves the previous set intact
+    instead of mixing files from two runs.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    quarantine_header = ["line", *COLUMNS, "reasons", "details", "flags"]
-    _write(out_dir / CLEAN_FILE, [*COLUMNS, "flags"], map(_clean_row, clean))
-    _write(out_dir / QUARANTINE_FILE, quarantine_header, map(_quarantine_row, quarantined))
-    _write(out_dir / DROPPED_FILE, ["line", *COLUMNS, "drop_reason"], map(_dropped_row, dropped))
+    files = {
+        CLEAN_FILE: ([*COLUMNS, "flags"], map(_clean_row, clean)),
+        QUARANTINE_FILE: (["line", *COLUMNS, "reasons", "details", "flags"], map(_quarantine_row, quarantined)),
+        DROPPED_FILE: (["line", *COLUMNS, "drop_reason"], map(_dropped_row, dropped)),
+    }
+    staged = {name: out_dir / f".{name}.tmp" for name in files}
+    try:
+        for name, (header, rows) in files.items():
+            _write(staged[name], header, rows)
+    except BaseException:
+        for tmp in staged.values():
+            tmp.unlink(missing_ok=True)
+        raise
+    for name, tmp in staged.items():
+        tmp.replace(out_dir / name)
 
 
 def _write(path: Path, header: list[str], rows: Iterable[list[str]]) -> None:

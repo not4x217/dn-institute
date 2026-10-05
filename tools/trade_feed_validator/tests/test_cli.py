@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fakes import FakeChain, utc
 
+from trade_feed_validator import output
 from trade_feed_validator.cli import main
 from trade_feed_validator.output import write_outputs
 from trade_feed_validator.parsing import COLUMNS
@@ -87,6 +88,26 @@ def test_input_columns_outside_the_schema_are_not_copied(tmp_path):
     [held] = read(tmp_path / "out" / "quarantine.csv")
     assert held["reasons"] == "malformed_row"
     assert list(held) == ["line", *COLUMNS, "reasons", "details", "flags"]
+
+
+def test_failed_write_keeps_the_previous_output_set(tmp_path, monkeypatch, capsys):
+    out_dir = tmp_path / "out"
+    main([str(SAMPLE), "--out-dir", str(out_dir)])
+    before = {p.name: p.read_text(encoding="utf-8") for p in out_dir.iterdir()}
+
+    write = output._write
+
+    def fail_on_quarantine(path, header, rows):
+        if path.name.startswith(".quarantine"):
+            raise OSError("disk full")
+        write(path, header, rows)
+
+    monkeypatch.setattr(output, "_write", fail_on_quarantine)
+    feed = tmp_path / "feed.csv"
+    feed.write_text(",".join(COLUMNS) + "\n", encoding="utf-8")
+    assert main([str(feed), "--out-dir", str(out_dir)]) == 1
+    assert "disk full" in capsys.readouterr().err
+    assert {p.name: p.read_text(encoding="utf-8") for p in out_dir.iterdir()} == before
 
 
 def test_feed_at_an_output_path_is_not_overwritten(tmp_path, capsys):
