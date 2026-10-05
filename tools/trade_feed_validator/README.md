@@ -51,7 +51,7 @@ Each pair is the same trade (transaction, wallet, side, amount, time) with a dif
 - evt_003 arrived well after evt_002, much later than the usual ingestion lag, so it's likely a redelivery (retry or reorg reprocessing).
 - evt_007 arrived together with evt_006, which also fits two legitimate trades in one transaction. Without an event identifier this can't be decided.
 
-**Handling:** the first record is loaded; later records matching it on transaction, wallet, side, amount and block time are quarantined as suspected duplicates, not dropped. A row whose block time is missing or impossible is matched only once the chain has supplied the real one. Checking the transaction on-chain resolves them: if it holds fewer matching trades than there are records, the extra records are duplicates (dropped); otherwise they're separate trades (loaded).
+**Handling:** the first record is loaded; later records matching it on transaction, wallet, side, amount and block time are quarantined as suspected duplicates, not dropped. A row whose block time is missing or impossible is matched only once the chain has supplied the real one. Decoding the transaction afresh from chain data resolves them: if it contains fewer matching trades than there are records, the extra records are duplicates (dropped); otherwise they're separate trades (loaded).
 Once the contract defines an event identifier, loads become idempotent upserts on it, so retries and backfills can't create duplicates; redeliveries are still counted, so a misbehaving source stays visible.
 
 **2. Missing required value** (evt_005)
@@ -93,7 +93,7 @@ Lag and freshness monitoring report impossible values and can mask real delays. 
 **Options**
 - **Drop:** simple, and analytics stays clean. But it silently loses a probably-real trade and hides the upstream defect. Irreversible.
 - **Estimated backfill** (from `ingested_at` or neighboring rows): loads immediately. But the time is a guess presented as fact; the feed's clock is unreliable (evt_008), and if the transaction never confirmed, it inserts a trade that never happened.
-- **Authoritative backfill** (look up `tx_hash` on-chain): exact, and verifies the trade exists and is final. But it needs chain access and adds latency; done inline, it ties the pipeline's availability to the chain node.
+- **Authoritative backfill** (look up `tx_hash` on-chain): exact, and verifies the transaction exists and is final. But it needs chain access and adds latency; done inline, it ties the pipeline's availability to the chain node.
 - **Dead-letter queue:** nothing incorrect is loaded, and the row is preserved and resolvable later. But totals are incomplete until resolution, and without monitoring and a deadline it becomes a slow drop. On its own it decides nothing.
 
 **Decision: dead-letter queue, resolved by authoritative backfill.**
@@ -130,7 +130,7 @@ Each row goes through three stages, in arrival order:
 
 1. **Parse** (`parsing.py`): the row becomes a typed event, or is quarantined with every problem found. Timestamps must be ISO 8601 with a timezone and are converted to UTC; `null` or an empty field counts as missing. A header without the seven schema columns, or with a repeated column, stops the run.
 2. **Check** (`checks.py`, `pipeline.py`): the invariant, then suspected duplicates. Rows with any violation are quarantined; the rest are clean.
-3. **Resolve** (`resolution.py`): quarantined rows are checked against the chain through the `ChainResolver` interface and are loaded, dropped or left in quarantine.
+3. **Resolve** (`resolution.py`): quarantined rows are checked through the `ChainResolver` interface (transaction facts from the chain, trade counts from decoding the transaction afresh) and are loaded, dropped or left in quarantine.
 
 ### Output
 
@@ -158,15 +158,15 @@ Input columns outside the schema aren't copied; `line` points to the full source
 | `block_time_backfilled` | flags | Missing `block_time` filled from the chain. |
 | `block_time_corrected` | flags | `block_time` replaced with the chain's value. |
 | `ingested_at_unreliable` | flags | `ingested_at` is earlier than the verified `block_time`. |
-| `confirmed_distinct_trade` | flags | The chain confirms a separate trade, not a duplicate. |
+| `confirmed_distinct_trade` | flags | Decoding the transaction afresh confirms a separate trade, not a duplicate. |
 | `tx_not_found` | drop_reason | Transaction not on chain, reverted or reorged out. |
-| `duplicate_confirmed` | drop_reason | More records than matching trades on chain. |
+| `duplicate_confirmed` | drop_reason | More records than matching trades in the transaction. |
 
 ## Scope
 
 **Implemented:** parsing and the schema check for the seven columns, the suspected-duplicate check, the `ingested_at ≥ block_time` invariant, per-row quarantine with line, raw values and reason codes, and resolution of every sample issue behind the chain resolver interface.
 
-**Stubbed:** the chain resolver. The run uses `NoOpResolver`, so quarantined rows stay quarantined; the tests use a fake chain for every outcome. Connecting a node or indexer means implementing `lookup_tx` and `count_matching_trades`.
+**Stubbed:** the chain resolver. The run uses `NoOpResolver`, so quarantined rows stay quarantined; the tests use a fake chain for every outcome. Connecting real sources means implementing `lookup_tx` (a chain query) and `count_matching_trades` (the indexer's decoding of a single transaction).
 
 **Proposed, not implemented:** the data contract, the ordering check, idempotent writes on an event identifier, per-batch alerting and per-feed reconciliation.
 
@@ -178,5 +178,5 @@ Input columns outside the schema aren't copied; `line` points to the full source
 
 ## Known limitations
 
-- If the chain has no matching trade at all, the later records are dropped, but the first is already in `clean.csv` and isn't withdrawn.
+- If the transaction has no matching trade at all, the later records are dropped, but the first is already in `clean.csv` and isn't withdrawn.
 - When the feed can't be read, output from an earlier run stays in place; only the exit code reports the failure.

@@ -13,7 +13,7 @@ class FakeChain:
     """A chain with known answers. Anything not listed has no answer yet.
 
     `txs` maps tx_hash to its block time, or to None if it isn't on chain;
-    `trades` maps tx_hash to the number of matching trades in it.
+    `trades` maps tx_hash to the number of matching trades a fresh decode finds.
     """
 
     def __init__(self, txs=None, trades=None):

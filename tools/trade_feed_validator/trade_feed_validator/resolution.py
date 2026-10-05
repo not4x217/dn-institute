@@ -1,6 +1,13 @@
-"""Resolve quarantined rows against an authoritative source (the chain).
+"""Resolve quarantined rows against authoritative sources.
 
-The chain is behind the ChainResolver interface. This package ships only
+The chain answers transaction facts: whether a transaction exists and is
+final, and its block time. It knows nothing about trades, which are the
+indexer's reading of a transaction's logs, so trade counts come from decoding
+the transaction afresh, independent of the feed that delivered the row. Trade
+content (wallet, side, amount) is the indexer's responsibility and is trusted,
+as it is for clean rows.
+
+Both sources are behind the ChainResolver interface. This package ships only
 NoOpResolver, which can't answer anything, so rows stay quarantined; a real
 implementation would query a node or indexer.
 """
@@ -35,7 +42,7 @@ class ChainResolver(Protocol):
         """None when there's no answer yet: source unavailable or tx not final."""
 
     def count_matching_trades(self, tx_hash: str, wallet: str, side: Side, amount: Decimal) -> int | None:
-        """How many trades in the transaction match; None when there's no answer yet."""
+        """How many matching trades a fresh decode of the transaction finds; None when there's no answer yet."""
 
 
 class NoOpResolver:
@@ -112,7 +119,7 @@ def _resolve_row(
             flags.add(Flag.INGESTED_AT_UNRELIABLE)
         duplicates = validator.duplicates.check(event)
 
-    # Suspected duplicate: the chain says how many such trades really exist,
+    # Suspected duplicate: a fresh decode says how many such trades really exist,
     # and records beyond that count are duplicates.
     if duplicates:
         key = trade_key(event)
